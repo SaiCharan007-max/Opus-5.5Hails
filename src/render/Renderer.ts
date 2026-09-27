@@ -1,6 +1,7 @@
 import { Application, Container, Graphics, Text, TextStyle } from "pixi.js";
 import type { Simulation } from "../sim/Simulation";
 import type { NPC } from "../npc/NPC";
+import type { Vehicle } from "../traffic/Vehicle";
 import type { Vec2 } from "../core/types";
 
 const DISTRICT_COLORS: Record<string, number> = {
@@ -29,9 +30,11 @@ export class Renderer {
   roadLayer = new Graphics();
   buildingLayer = new Graphics();
   npcLayer = new Container();
+  vehicleLayer = new Container();
   playerMarker = new Graphics();
 
   private npcSprites = new Map<string, Graphics>();
+  private vehicleSprites = new Map<string, Graphics>();
   private hoveredNpcId: string | null = null;
 
   onNpcClick: ((npcId: string) => void) | null = null;
@@ -45,7 +48,7 @@ export class Renderer {
     });
     container.appendChild(this.app.canvas);
 
-    this.world.addChild(this.roadLayer, this.buildingLayer, this.npcLayer, this.playerMarker);
+    this.world.addChild(this.roadLayer, this.buildingLayer, this.vehicleLayer, this.npcLayer, this.playerMarker);
     this.app.stage.addChild(this.world);
 
     this.drawStaticBackdropPlaceholder();
@@ -110,6 +113,32 @@ export class Renderer {
     }
   }
 
+  syncVehicles(vehicles: Iterable<Vehicle>): void {
+    const seen = new Set<string>();
+    for (const v of vehicles) {
+      seen.add(v.id);
+      let g = this.vehicleSprites.get(v.id);
+      if (!g) {
+        g = new Graphics();
+        this.vehicleSprites.set(v.id, g);
+        this.vehicleLayer.addChild(g);
+      }
+      const moving = v.pathNodeIds.length > 0;
+      g.clear();
+      g.visible = moving;
+      if (moving) {
+        g.rect(-4, -2.5, 8, 5).fill({ color: v.waiting ? 0xaa3333 : vehicleColor(v.kind) });
+        g.position.set(v.pos.x, v.pos.y);
+      }
+    }
+    for (const [id, g] of this.vehicleSprites) {
+      if (!seen.has(id)) {
+        g.destroy();
+        this.vehicleSprites.delete(id);
+      }
+    }
+  }
+
   drawPlayer(pos: Vec2): void {
     this.playerMarker.clear();
     this.playerMarker.circle(0, 0, 5).fill({ color: 0xffffff }).stroke({ width: 1.5, color: 0x000000 });
@@ -126,6 +155,23 @@ export class Renderer {
       x: (sx - this.world.position.x) / this.world.scale.x,
       y: (sy - this.world.position.y) / this.world.scale.y,
     };
+  }
+}
+
+function vehicleColor(kind: string): number {
+  switch (kind) {
+    case "police_car":
+      return 0x4d7cff;
+    case "fire_truck":
+      return 0xff5a3c;
+    case "ambulance":
+      return 0xff6bd1;
+    case "bus":
+      return 0xffd24d;
+    case "truck":
+      return 0x8d8d8d;
+    default:
+      return 0xcccccc;
   }
 }
 

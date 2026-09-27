@@ -5,7 +5,8 @@ import { resetIdCounter, type Vec2 } from "../core/types";
 import { City } from "../world/City";
 import { generateCity } from "../world/WorldGen";
 import { NPCSystem } from "../npc/NPCSystem";
-import { populateCity } from "../npc/NPCFactory";
+import { assignVehicles, populateCity } from "../npc/NPCFactory";
+import { VehicleSystem } from "../traffic/VehicleSystem";
 
 export interface SimulationConfig {
   seed: number;
@@ -24,6 +25,7 @@ export class Simulation {
   city: City;
   rng: SeededRandom;
   npcSystem: NPCSystem;
+  vehicleSystem: VehicleSystem;
 
   private accumulatorSeconds = 0;
   private readonly tickSeconds = 0.1; // 10 Hz fixed sim tick
@@ -38,9 +40,13 @@ export class Simulation {
     this.rng = new SeededRandom(config.seed);
     this.city = generateCity(config.seed);
     this.bus = new EventBus();
-    this.npcSystem = new NPCSystem(this.city, this.bus, this.rng.fork());
+    this.vehicleSystem = new VehicleSystem(this.city);
+    this.npcSystem = new NPCSystem(this.city, this.bus, this.rng.fork(), this.vehicleSystem);
     const npcs = populateCity(this.city, this.rng.fork(), config.npcCount);
     this.npcSystem.addAll(npcs);
+    assignVehicles(npcs, this.city, this.rng.fork(), (id, ownerId, home) =>
+      this.vehicleSystem.spawnParked(id, "sedan", ownerId, home),
+    );
   }
 
   /** Advance the whole simulation by realDeltaSeconds of wall-clock time. */
@@ -54,6 +60,7 @@ export class Simulation {
       this.clock.advance(this.tickSeconds);
       const now = this.clock.now();
       this.npcSystem.update(this.clock.totalMinutes, now, dtSimMinutes, focusPos);
+      this.vehicleSystem.update(dtSimMinutes);
     }
   }
 }

@@ -195,6 +195,7 @@ function spawnOne(city: City, rng: SeededRandom, home: Building, workplaces: Bui
     pos: { x: home.x, y: home.y },
     pathNodeIds: [],
     pathIndex: 0,
+    inVehicle: false,
     lod: "abstract",
     lastFullUpdateMinutes: 0,
     wantedLevel: 0,
@@ -206,4 +207,29 @@ function spawnOne(city: City, rng: SeededRandom, home: Building, workplaces: Bui
   home.residentIds.push(npc.id);
   if (workplace) workplace.employeeIds.push(npc.id);
   return npc;
+}
+
+/**
+ * Gives car ownership to a subset of employed NPCs and spawns their vehicle
+ * parked at home. Run once at world-gen time, after populateCity(). Kept
+ * separate rather than folded into spawnOne() because it needs a
+ * VehicleSystem instance, which is constructed after NPCs are populated
+ * (see Simulation constructor) — a small ordering dependency worth keeping
+ * explicit rather than threading VehicleSystem through the whole factory.
+ */
+export function assignVehicles(
+  npcs: NPC[],
+  city: City,
+  rng: SeededRandom,
+  spawnVehicle: (id: string, ownerNpcId: string, home: Building) => void,
+): void {
+  for (const npc of npcs) {
+    if (npc.occupation === "unemployed" || npc.occupation === "student") continue;
+    if (!rng.chance(0.6)) continue;
+    const home = city.buildings.get(npc.homeId);
+    if (!home) continue;
+    const vehicleId = nextId("veh");
+    spawnVehicle(vehicleId, npc.id, home);
+    npc.vehicleId = vehicleId;
+  }
 }

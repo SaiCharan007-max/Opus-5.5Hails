@@ -4,10 +4,12 @@ import type { SeededRandom } from "../core/Random";
 import { dist, type Vec2 } from "../core/types";
 import type { City } from "../world/City";
 import type { Building } from "../world/City";
+import type { VehicleSystem } from "../traffic/VehicleSystem";
 import type { ActivityKind, LODTier, NPC } from "./NPC";
 import { decideActivity, scheduleTargetBuilding } from "./UtilityAI";
 
 const WALK_SPEED = 6; // world units per sim-minute
+const DRIVE_DISTANCE_THRESHOLD = 180; // below this, NPCs just walk even if they own a car
 const NEED_DECAY = { hunger: 0.06, energy: 0.045, social: 0.03, fun: 0.025 };
 
 const LOD_RADIUS = { high: 250, medium: 700, low: 1600 };
@@ -21,6 +23,7 @@ export class NPCSystem {
     private city: City,
     private bus: EventBus,
     private rng: SeededRandom,
+    private vehicleSystem?: VehicleSystem,
   ) {}
 
   addAll(npcs: NPC[]): void {
@@ -75,7 +78,11 @@ export class NPCSystem {
       this.beginActivity(npc, desiredActivity, now);
     }
 
-    this.progressMovement(npc, dtMinutes);
+    if (npc.inVehicle) {
+      this.syncFromVehicle(npc);
+    } else {
+      this.progressMovement(npc, dtMinutes);
+    }
     this.applyActivityEffects(npc, dtMinutes, now);
   }
 
@@ -86,11 +93,39 @@ export class NPCSystem {
     const target = this.resolveTargetBuilding(npc, activity, now);
     npc.targetBuildingId = target?.id;
 
-    if (target && dist(npc.pos, target) > 8) {
-      this.requestPath(npc, target);
-    } else {
+    if (!target || dist(npc.pos, target) <= 8) {
       npc.pathNodeIds = [];
       npc.pathIndex = 0;
+      npc.inVehicle = false;
+      return;
+    }
+
+    if (npc.vehicleId && this.vehicleSystem && dist(npc.pos, target) > DRIVE_DISTANCE_THRESHOLD) {
+      const ok = this.vehicleSystem.requestTrip(npc.vehicleId, target);
+      if (ok) {
+        npc.inVehicle = true;
+        npc.pathNodeIds = [];
+        return;
+      }
+    }
+    npc.inVehicle = false;
+    this.requestPath(npc, target);
+  }
+
+  /** While driving, the NPC's world position just follows their vehicle each tick. */
+  private syncFromVehicle(npc: NPC): void {
+    if (!npc.vehicleId || !this.vehicleSystem) {
+      npc.inVehicle = false;
+      return;
+    }
+    const vehicle = this.vehicleSystem.vehicles.get(npc.vehicleId);
+    if (!vehicle) {
+      npc.inVehicle = false;
+      return;
+    }
+    npc.pos = { ...vehicle.pos };
+    if (this.vehicleSystem.hasArrived(npc.vehicleId)) {
+      npc.inVehicle = false;
     }
   }
 
@@ -172,7 +207,7 @@ export class NPCSystem {
   }
 
   private applyActivityEffects(npc: NPC, dtMinutes: number, now: CalendarDate): void {
-    const arrived = npc.pathNodeIds.length === 0;
+    const arrived = !npc.inVehicle && npc.pathNodeIds.length === 0;
     if (!arrived) {
       if (npc.currentActivity !== "committing_crime") npc.currentActivity = "commuting";
       return;
@@ -252,8 +287,10 @@ export class NPCSystem {
     if (target) {
       npc.pos = { x: target.x, y: target.y };
       npc.targetBuildingId = target.id;
+      if (npc.vehicleId) this.vehicleSystem?.parkAt(npc.vehicleId, target);
     }
     npc.pathNodeIds = [];
+    npc.inVehicle = false;
 
     if (decision.activity === "working") {
       npc.money += (npc.wage / 60) * elapsed;

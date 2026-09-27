@@ -57,6 +57,13 @@ export class RoadGraph {
     return edge.from === nodeId ? edge.to : edge.from;
   }
 
+  /** Which traffic-light axis this edge belongs to, based on its dominant direction. */
+  axisOf(edge: RoadEdge): "ns" | "ew" {
+    const a = this.nodes.get(edge.from)!;
+    const b = this.nodes.get(edge.to)!;
+    return Math.abs(a.x - b.x) >= Math.abs(a.y - b.y) ? "ew" : "ns";
+  }
+
   nearestNode(pos: Vec2): RoadNode | undefined {
     let best: RoadNode | undefined;
     let bestD = Infinity;

@@ -185,10 +185,64 @@ up is a config change (`NPC_COUNT` in `main.ts`), not a rearchitecture.
 
 Run with `npm test`.
 
+## Traffic & vehicles (spec section 7, Phase 5)
+
+`VehicleSystem` (`src/traffic/`) is a separate system from `NPCSystem`, not
+a subclass of it — vehicles are their own entities with their own
+pathfinding/movement, and NPCs merely "attach" to one while driving
+(`npc.inVehicle`, `npc.pos` synced from `vehicle.pos` each tick in
+`NPCSystem.syncFromVehicle`). This mirrors real life (the car exists
+independent of who's in it) and keeps VehicleSystem reusable later for
+ambient/AI-only traffic that no NPC owns.
+
+**Car ownership**: 60% of employed, non-student NPCs get a car
+(`NPCFactory.assignVehicles`), spawned parked at their home. **Drive vs
+walk**: NPCSystem only requests a vehicle trip if straight-line distance to
+the target exceeds `DRIVE_DISTANCE_THRESHOLD` (180 units) — short hops stay
+on foot, matching how people actually behave (nobody drives two doors down).
+
+**Traffic lights**: every node with 3+ connecting edges got a light at
+world-gen time; `VehicleSystem.cycleTrafficLights` flips `lightAxis` every 2
+sim-minutes. A vehicle checks the light's axis against the edge it's
+entering from (`RoadGraph.axisOf`) and stops if they don't match — real
+stop-and-go behavior, not a cosmetic light.
+
+**Congestion feedback loop**: while driving, each vehicle increments an
+occupancy counter on the edge it's currently traversing; after all vehicles
+move, occupancy is converted into `edge.congestion` (capped, decays over
+time when not reinforced) and written back onto the `RoadGraph` edge that
+`findPath` already reads. This closes the loop described in the Phase 1
+pathfinding notes: pathfinding didn't need to change for congestion-routing
+to work, because both NPC and vehicle pathfinding already price it in via
+edge cost.
+
+**LOD interaction**: `VehicleSystem.update()` still moves every vehicle in
+the city every tick regardless of its owner's NPC LOD tier — vehicle
+movement is O(active trips), not O(NPCs), and is cheap enough (~150 vehicles
+at current 250-NPC scale) not to need its own LOD yet. To keep abstract-tier
+NPCs from visually diverging from a vehicle mid-drive somewhere else in the
+city, `NPCSystem.abstractCatchUp` calls `VehicleSystem.parkAt()` to
+snap-park the NPC's car at their new (teleported) location whenever an
+abstract NPC's schedule block changes — this is a documented simplification
+(the car "teleports" with its owner) rather than a bug: correct
+full-fidelity vehicle simulation for entities we're not even
+pathfinding-updating wouldn't be worth the cost. Revisit if this becomes
+visible as a real artifact once traffic density/observer mode make it
+common to watch an abstract NPC's car.
+
+**Tests**: `tests/vehicles.test.ts` covers real pathing to a target,
+absence of NaN across many ticks with several concurrent trips (congestion
+active), and traffic-light axis toggling over time.
+
+**Rendering**: vehicles are simple rectangles, red while waiting at a red
+light, colored by vehicle kind. Not yet in the debug/inspector overlay —
+Phase 14 territory.
+
 ## What's deliberately NOT built yet (upcoming phases)
 
-Economy (beyond wage accrual), traffic/vehicles, police/crime response,
-relationships/memory writes (fields exist on NPC, nothing populates them
-yet), procedural events, missions, save/load, observer/debug mode beyond
-the basic click-to-inspect HUD, chaos testing. Tracked phase-by-phase; see
-commit history for what landed when.
+Economy (beyond wage accrual), police/crime response, relationships/memory
+writes (fields exist on NPC, nothing populates them yet), procedural
+events, missions, save/load, observer/debug mode beyond the basic
+click-to-inspect HUD, chaos testing, ambient (non-NPC-owned) traffic like
+buses/taxis. Tracked phase-by-phase; see commit history for what landed
+when.

@@ -131,6 +131,9 @@ export interface NPC {
   pathIndex: number;
   targetBuildingId?: string;
 
+  vehicleId?: string;
+  inVehicle: boolean;
+
   lod: LODTier;
   lastFullUpdateMinutes: number;
 

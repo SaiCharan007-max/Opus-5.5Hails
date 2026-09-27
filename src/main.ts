@@ -74,6 +74,7 @@ async function main() {
     sim.step(dtSeconds, player.pos);
 
     renderer.syncNPCs(sim.npcSystem.npcs.values());
+    renderer.syncVehicles(sim.vehicleSystem.vehicles.values());
     renderer.drawPlayer(player.pos);
     renderer.centerCameraOn(player.pos, 2.2);
 
