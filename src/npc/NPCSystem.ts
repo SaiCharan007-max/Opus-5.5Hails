@@ -71,11 +71,14 @@ export class NPCSystem {
     this.decayNeeds(npc, dtMinutes);
     npc.lastFullUpdateMinutes = nowMinutes;
 
-    const decision = decideActivity(npc, now);
-    const desiredActivity = decision.activity;
-
-    if (desiredActivity !== npc.currentActivity || npc.pathNodeIds.length === 0) {
-      this.beginActivity(npc, desiredActivity, now);
+    const desired = decideActivity(npc, now).activity;
+    const traveling = npc.inVehicle || npc.pathNodeIds.length > 0;
+    const target = npc.targetBuildingId ? this.city.buildings.get(npc.targetBuildingId) : undefined;
+    // Re-plan only when the goal changes, or when stranded short of the target (e.g. a trip that
+    // could not be routed). Re-planning mid-trip would restart the route from the last node passed.
+    const stranded = !traveling && target !== undefined && dist(npc.pos, target) > 8;
+    if (desired !== npc.currentGoal || stranded) {
+      this.beginActivity(npc, desired, now);
     }
 
     if (npc.inVehicle) {
@@ -91,6 +94,10 @@ export class NPCSystem {
     npc.currentGoal = activity;
 
     const target = this.resolveTargetBuilding(npc, activity, now);
+    const traveling = npc.inVehicle || npc.pathNodeIds.length > 0;
+    if (traveling && target && target.id === npc.targetBuildingId) {
+      return; // same destination (e.g. commute block rolled into work block mid-trip): keep driving
+    }
     npc.targetBuildingId = target?.id;
 
     if (!target || dist(npc.pos, target) <= 8) {
@@ -126,6 +133,9 @@ export class NPCSystem {
     npc.pos = { ...vehicle.pos };
     if (this.vehicleSystem.hasArrived(npc.vehicleId)) {
       npc.inVehicle = false;
+      // Car stays parked at the curb; the driver walks the last few meters inside.
+      const target = npc.targetBuildingId ? this.city.buildings.get(npc.targetBuildingId) : undefined;
+      if (target) npc.pos = { x: target.x, y: target.y };
     }
   }
 
@@ -139,7 +149,8 @@ export class NPCSystem {
       case "working":
         return b.get(scheduleTargetBuilding(npc, now) ?? npc.workplaceId ?? "");
       case "commuting":
-        return b.get(npc.workplaceId ?? npc.homeId);
+        // Morning commute blocks carry the workplace; evening ones don't, meaning "head home".
+        return b.get(scheduleTargetBuilding(npc, now) ?? npc.homeId);
       case "shopping":
         return this.nearest(npc, "shop");
       case "socializing":
@@ -207,11 +218,13 @@ export class NPCSystem {
   }
 
   private applyActivityEffects(npc: NPC, dtMinutes: number, now: CalendarDate): void {
-    const arrived = !npc.inVehicle && npc.pathNodeIds.length === 0;
-    if (!arrived) {
-      if (npc.currentActivity !== "committing_crime") npc.currentActivity = "commuting";
+    const traveling = npc.inVehicle || npc.pathNodeIds.length > 0;
+    if (traveling) {
+      npc.currentActivity = "commuting";
       return;
     }
+    // Arrived: the displayed activity becomes the goal we travelled for.
+    if (npc.currentActivity === "commuting") npc.currentActivity = npc.currentGoal as ActivityKind;
     switch (npc.currentActivity) {
       case "sleeping":
         npc.needs.energy = Math.min(100, npc.needs.energy + 0.5 * dtMinutes);
@@ -283,6 +296,7 @@ export class NPCSystem {
 
     const decision = decideActivity(npc, now);
     npc.currentActivity = decision.activity;
+    npc.currentGoal = decision.activity;
     const target = this.resolveTargetBuilding(npc, decision.activity, now);
     if (target) {
       npc.pos = { x: target.x, y: target.y };
