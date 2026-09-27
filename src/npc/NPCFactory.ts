@@ -13,10 +13,15 @@ import type {
 const FIRST_NAMES = [
   "Alex", "Jordan", "Sam", "Casey", "Riley", "Morgan", "Taylor", "Jamie", "Drew", "Avery",
   "Quinn", "Reese", "Skyler", "Rowan", "Elliot", "Dana", "Kai", "Micah", "Noel", "Sage",
+  "Maya", "Leo", "Ines", "Omar", "Priya", "Hugo", "Lena", "Mateo", "Yuki", "Nadia",
+  "Felix", "Ada", "Tomas", "Zara", "Ravi", "Elena", "Jonah", "Mira", "Idris", "Clara",
+  "Theo", "Amara", "Viktor", "Sofia", "Kenji", "Lucia", "Marcus", "Hana", "Diego", "Freya",
 ];
 const LAST_NAMES = [
   "Reyes", "Novak", "Whitfield", "Okafor", "Sato", "Marsh", "Delgado", "Petrov", "Nakamura",
   "Brennan", "Alvi", "Castillo", "Larsen", "Mbeki", "Rossi", "Kowalski", "Haddad", "Lund",
+  "Moreau", "Chen", "Adeyemi", "Fischer", "Silva", "O'Neill", "Kaur", "Varga", "Lindqvist",
+  "Hassan", "Duarte", "Ivanova", "Park", "Mendez", "Quinlan", "Abara", "Holm", "Tanaka",
 ];
 
 function randomName(rng: SeededRandom): string {
@@ -36,7 +41,7 @@ function randomPersonality(rng: SeededRandom): Personality {
   };
 }
 
-function occupationForWorkplace(kind: Building["kind"]): OccupationKind {
+export function occupationForWorkplace(kind: Building["kind"]): OccupationKind {
   switch (kind) {
     case "police_station":
       return "police_officer";
@@ -47,22 +52,45 @@ function occupationForWorkplace(kind: Building["kind"]): OccupationKind {
     case "shop":
     case "restaurant":
       return "shop_worker";
+    case "government":
     case "school":
-      return "student"; // teachers modeled as office_worker below is overridden by caller for staff
+      return "civil_servant";
     default:
       return "office_worker";
   }
 }
 
-function factionForOccupation(occ: OccupationKind): FactionId {
+/** Hourly wage by occupation; shop work pays least, professionals most. */
+export function wageFor(occ: OccupationKind, rng: SeededRandom): number {
+  switch (occ) {
+    case "shop_worker":
+      return rng.int(13, 19);
+    case "office_worker":
+      return rng.int(20, 36);
+    case "business_owner":
+      return rng.int(28, 40);
+    case "doctor":
+      return rng.int(38, 52);
+    case "police_officer":
+    case "firefighter":
+      return rng.int(24, 32);
+    case "civil_servant":
+      return rng.int(20, 28);
+    default:
+      return 0;
+  }
+}
+
+export function factionForOccupation(occ: OccupationKind): FactionId {
   if (occ === "police_officer") return "police";
   if (occ === "firefighter" || occ === "doctor") return "emergency_services";
   if (occ === "criminal") return "criminals";
+  if (occ === "civil_servant") return "government";
   if (occ === "business_owner" || occ === "shop_worker" || occ === "office_worker") return "business";
   return "civilians";
 }
 
-function buildSchedule(rng: SeededRandom, occupation: OccupationKind, workplaceId?: string): ScheduleBlock[] {
+export function buildSchedule(rng: SeededRandom, occupation: OccupationKind, workplaceId?: string): ScheduleBlock[] {
   const wake = rng.int(6, 8);
   const sleep = rng.int(22, 24);
   if (occupation === "unemployed" || occupation === "criminal") {
@@ -169,7 +197,6 @@ function spawnOne(city: City, rng: SeededRandom, home: Building, workplaces: Bui
       const candidates = workplaces.filter((w) => w.employeeIds.length < w.jobCapacity && w.kind !== "school");
       workplace = candidates.length ? rng.pick(candidates) : undefined;
       occupation = workplace ? occupationForWorkplace(workplace.kind) : "unemployed";
-      if (workplace?.kind === "office") occupation = rng.chance(0.15) ? "business_owner" : "office_worker";
     }
   }
 
@@ -183,9 +210,13 @@ function spawnOne(city: City, rng: SeededRandom, home: Building, workplaces: Bui
     needs: { hunger: rng.int(60, 100), energy: rng.int(60, 100), social: rng.int(50, 100), fun: rng.int(50, 100), safety: 100 },
     skills: { work: rng.next(), charisma: rng.next(), combat: rng.next() * (occupation === "police_officer" ? 0.6 + rng.next() * 0.4 : 1) },
     homeId: home.id,
+    homeless: false,
+    missedRent: 0,
     workplaceId: workplace?.id,
-    money: rng.int(200, 3000),
-    wage: workplace ? rng.int(12, 40) : 0,
+    daysUnemployed: 0,
+    money: rng.int(300, 3500),
+    wage: workplace ? wageFor(occupation, rng) : 0,
+    health: rng.int(80, 100),
     inventory: [],
     relationships: new Map(),
     memories: [],

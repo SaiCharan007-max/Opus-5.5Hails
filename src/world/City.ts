@@ -36,6 +36,12 @@ export interface Building {
   closeHour: number;
   /** Only meaningful for shops/restaurants/offices — drives economy + business.closed events. */
   businessId?: string;
+  /** Fire intensity 0..1 while burning. */
+  onFire?: number;
+  ruined?: boolean;
+  ruinedSinceDay?: number;
+  /** Capacity to restore when a ruined building is rebuilt. */
+  rebuildResidentCapacity?: number;
 }
 
 export class City {

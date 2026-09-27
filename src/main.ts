@@ -29,11 +29,14 @@ async function main() {
   renderer.snapCamera(player.pos);
 
   let selectedId: string | null = null;
+  let selectedBuildingId: string | null = null;
   let followingId: string | null = null;
 
   const hud = new HUD(container, sim, {
     onSpeed: (s) => setSpeed(s),
     onFollow: (id) => follow(id),
+    onSelectNpc: (id) => select(id),
+    onSelectBuilding: (id) => selectBuilding(id),
     onClose: () => deselect(),
   });
 
@@ -47,23 +50,39 @@ async function main() {
   }
   function select(id: string) {
     selectedId = id;
+    selectedBuildingId = null;
+    renderer.selectedBuildingId = null;
     const npc = sim.npcSystem.npcs.get(id);
-    if (npc) hud.showInspector(npc, sim, followingId === id, true);
+    if (npc) hud.showInspector(npc, followingId === id, true);
+  }
+  function selectBuilding(id: string) {
+    selectedBuildingId = id;
+    renderer.selectedBuildingId = id;
+    selectedId = null;
+    followingId = null;
+    hud.setFollowing(null);
+    const b = sim.city.buildings.get(id);
+    if (b) hud.showBuilding(b, true);
   }
   function follow(id: string) {
     followingId = followingId === id ? null : id;
     hud.setFollowing(followingId ? sim.npcSystem.npcs.get(followingId)?.name ?? null : null);
     const npc = sim.npcSystem.npcs.get(id);
-    if (npc) hud.showInspector(npc, sim, followingId === id, true);
+    if (npc) hud.showInspector(npc, followingId === id, true);
   }
   function deselect() {
     selectedId = null;
+    selectedBuildingId = null;
+    renderer.selectedBuildingId = null;
     followingId = null;
     hud.setFollowing(null);
     hud.hideInspector();
   }
 
   renderer.entities.onPersonClick = (id) => select(id);
+  renderer.onBackgroundClick = (buildingId) => {
+    if (buildingId) selectBuilding(buildingId);
+  };
   renderer.entities.onVehicleClick = (vid) => {
     const owner = sim.vehicleSystem.vehicles.get(vid)?.ownerNpcId;
     if (owner) select(owner);
@@ -78,6 +97,8 @@ async function main() {
       e.preventDefault();
     } else if (e.key >= "1" && e.key <= "6") {
       setSpeed(SPEED_KEYS[Number(e.key) - 1]);
+    } else if (k === "c") {
+      hud.toggleChronicle();
     } else if (k === "f" && selectedId) {
       follow(selectedId);
     } else if (e.key === "F3") {
@@ -145,12 +166,15 @@ async function main() {
     }
     renderer.frame(sim, dt, focus, player.pos, player.heading, selectedId);
 
-    hud.update(sim, fps, simMs, focus, dt);
+    hud.update(fps, simMs, focus, dt);
     hud.minimap.draw(sim, player.pos, renderer.viewRect(), selectedId ? sim.npcSystem.npcs.get(selectedId)?.pos : undefined);
     if (selectedId) {
       const npc = sim.npcSystem.npcs.get(selectedId);
-      if (npc) hud.showInspector(npc, sim, followingId === selectedId);
+      if (npc) hud.showInspector(npc, followingId === selectedId);
       else deselect();
+    } else if (selectedBuildingId) {
+      const b = sim.city.buildings.get(selectedBuildingId);
+      if (b) hud.showBuilding(b);
     }
     requestAnimationFrame(frame);
   }

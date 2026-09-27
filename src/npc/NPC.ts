@@ -9,6 +9,7 @@ export type OccupationKind =
   | "student"
   | "business_owner"
   | "unemployed"
+  | "civil_servant"
   | "criminal";
 
 export type FactionId = "civilians" | "police" | "government" | "criminals" | "business" | "emergency_services";
@@ -73,6 +74,8 @@ export interface Relationship {
   /** -100..100 */
   trust: number;
   lastInteractionMinutes: number;
+  /** When a romantic relationship began. */
+  since?: number;
 }
 
 export type ActivityKind =
@@ -111,11 +114,19 @@ export interface NPC {
   needs: Needs;
   skills: { work: number; charisma: number; combat: number };
 
+  /** Empty string when homeless. */
   homeId: string;
+  homeless: boolean;
+  missedRent: number;
   workplaceId?: string;
+  daysUnemployed: number;
+  partnerId?: string;
 
   money: number;
   wage: number; // per sim-hour worked, if employed
+  health: number; // 0..100
+  /** Sim minute at which custody (jail) or hospital stay ends. */
+  releaseAtMinutes?: number;
 
   inventory: string[];
   relationships: Map<string, Relationship>;
@@ -140,5 +151,7 @@ export interface NPC {
   wantedLevel: number; // 0..5
   criminalRecord: number; // count of past crimes
   alive: boolean;
-  status: "free" | "arrested" | "fleeing" | "hospitalized" | "deceased";
+  status: "free" | "arrested" | "fleeing" | "incapacitated" | "hospitalized" | "deceased";
+  gangId?: string;
+  incapacitatedAt?: number;
 }

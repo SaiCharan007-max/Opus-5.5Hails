@@ -24,6 +24,8 @@ export interface PaintedCity {
   structures: Container;
   /** Additive-blend night lights: lit windows and lamp glow. Alpha is driven by darkness. */
   nightLights: Container;
+  /** Lit-window layer per building, so brightness can follow who is actually inside. */
+  windowsByBuilding: Map<string, Graphics>;
 }
 
 const TERRAIN_MARGIN = 1400;
@@ -57,11 +59,12 @@ export function paintCity(city: City): PaintedCity {
   const foliage = new Graphics();
   structures.addChild(buildings, foliage);
 
-  const windows = new Graphics();
   const lamps = new Graphics();
-  windows.blendMode = "add";
   lamps.blendMode = "add";
-  nightLights.addChild(lamps, windows);
+  const windowLayer = new Container();
+  windowLayer.blendMode = "add";
+  nightLights.addChild(lamps, windowLayer);
+  const windowsByBuilding = new Map<string, Graphics>();
 
   paintTerrain(terrain, foliage, rng);
   paintCoast(terrain, structures, rng);
@@ -72,10 +75,15 @@ export function paintCity(city: City): PaintedCity {
   for (const b of sorted) {
     if (b.kind === "park") paintPark(b, lots, foliage, rng);
     else if (b.kind === "parking") paintParking(b, lots, rng);
-    else paintBuilding(b, shadows, buildings, windows, foliage, rng);
+    else {
+      const windows = new Graphics();
+      windowLayer.addChild(windows);
+      windowsByBuilding.set(b.id, windows);
+      paintBuilding(b, shadows, buildings, windows, foliage, rng);
+    }
   }
 
-  return { ground, structures, nightLights };
+  return { ground, structures, nightLights, windowsByBuilding };
 }
 
 function paintTerrain(g: Graphics, foliage: Graphics, rng: SeededRandom): void {
@@ -403,7 +411,7 @@ function paintBuilding(b: Building, shadows: Graphics, g: Graphics, windows: Gra
         const wx = x0 + 1 + c * pitch + pitch * 0.2;
         const ww = pitch * 0.6;
         g.rect(wx, wy, ww, wh).fill({ color: 0x1d2a38, alpha: 0.75 });
-        if (!b.vacant && rng.chance(litChance(b))) {
+        if (rng.chance(litChance(b))) {
           windows.rect(wx, wy, ww, wh).fill({ color: LIGHT.window, alpha: rng.float(0.55, 0.95) });
         }
       }

@@ -2,8 +2,9 @@ import { Application, Container, Graphics } from "pixi.js";
 import type { Simulation } from "../sim/Simulation";
 import type { Vec2 } from "../core/types";
 import { CITY_HEIGHT, CITY_WIDTH } from "../world/constants";
-import { paintCity } from "./CityPainter";
+import { paintCity, wallHeight } from "./CityPainter";
 import { EntityLayer } from "./EntityLayer";
+import { EffectsLayer } from "./EffectsLayer";
 import { LIGHT } from "./palette";
 
 const MIN_ZOOM = 0.9;
@@ -18,8 +19,12 @@ export class Renderer {
   app!: Application;
   readonly world = new Container();
   entities!: EntityLayer;
+  readonly effects = new EffectsLayer();
+  private sim!: Simulation;
   private darkness = new Graphics();
   private nightLights!: Container;
+  private windowsByBuilding = new Map<string, Graphics>();
+  private occupancyTimer = 0;
   private signals = new Graphics();
   private route = new Graphics();
   private selection = new Graphics();
@@ -44,8 +49,10 @@ export class Renderer {
     this.app.canvas.style.inset = "0";
     container.appendChild(this.app.canvas);
 
+    this.sim = sim;
     const painted = paintCity(sim.city);
     this.nightLights = painted.nightLights;
+    this.windowsByBuilding = painted.windowsByBuilding;
     this.entities = new EntityLayer(sim.city);
 
     this.darkness.rect(-2000, -2000, CITY_WIDTH + 4000, CITY_HEIGHT + 4000).fill(0xffffff);
@@ -60,20 +67,59 @@ export class Renderer {
     this.player.circle(0.3, 0, 1.15).fill(0xf1c9a5);
     this.player.poly([3.2, -1.1, 5, 0, 3.2, 1.1]).fill(0x4dd2ff);
 
+    this.effects.over.eventMode = "none";
+    this.effects.smoke.eventMode = "none";
     this.world.addChild(
       painted.ground,
       this.route,
+      this.effects.under,
       this.entities.vehicles,
       this.entities.people,
       this.player,
       painted.structures,
+      this.effects.smoke,
       this.darkness,
       this.nightLights,
       this.entities.beams,
+      this.effects.over,
       this.signals,
       this.selection,
     );
     this.app.stage.addChild(this.world);
+    this.app.stage.eventMode = "static";
+    this.app.stage.hitArea = this.app.screen;
+    this.app.stage.on("pointertap", (e) => {
+      const p = this.screenToWorld(e.global.x, e.global.y);
+      const id = this.pickBuilding(p.x, p.y);
+      this.onBackgroundClick?.(id);
+    });
+  }
+
+  /** Fired for clicks that didn't hit a person or car; carries the building under the cursor, if any. */
+  onBackgroundClick: ((buildingId: string | undefined) => void) | null = null;
+  selectedBuildingId: string | null = null;
+
+  screenToWorld(sx: number, sy: number): Vec2 {
+    return { x: (sx - this.world.position.x) / this.world.scale.x, y: (sy - this.world.position.y) / this.world.scale.y };
+  }
+
+  /** Hit-tests the drawn 2.5D shape (facade + shifted roof), front-most building first. */
+  pickBuilding(x: number, y: number): string | undefined {
+    let best: string | undefined;
+    let bestDepth = -Infinity;
+    for (const b of this.sim.city.buildings.values()) {
+      const s = wallHeight(b);
+      const x0 = b.x - b.w / 2;
+      const top = b.y - b.h / 2 - s;
+      const bottom = b.y + b.h / 2;
+      if (x < x0 || x > x0 + b.w || y < top || y > bottom) continue;
+      const depth = b.y + b.h / 2;
+      if (depth > bestDepth) {
+        bestDepth = depth;
+        best = b.id;
+      }
+    }
+    return best;
   }
 
   /** Called once per frame with the camera target (player or followed NPC). */
@@ -85,9 +131,15 @@ export class Renderer {
     this.applyCamera();
 
     this.updateLighting(sim);
+    this.occupancyTimer -= dt;
+    if (this.occupancyTimer <= 0) {
+      this.occupancyTimer = 0.5;
+      this.updateWindowLights(sim);
+    }
     this.entities.syncVehicles(sim.vehicleSystem.vehicles.values(), dt, this.darknessLevel);
     this.entities.syncPeople(sim.npcSystem.npcs.values(), dt);
     this.drawSignals(sim);
+    this.effects.frame(sim, dt);
 
     this.player.position.set(playerPos.x, playerPos.y);
     this.player.rotation = playerHeading;
@@ -136,6 +188,33 @@ export class Renderer {
     this.nightLights.alpha = smoothstep(0.25, 0.75, darkness);
   }
 
+  /**
+   * Window lights follow real occupancy: a building glows in proportion to
+   * the people awake inside it right now. Empty towers stay dark; a busy
+   * hospital or a late shift at the precinct stays lit.
+   */
+  private updateWindowLights(sim: Simulation): void {
+    const awake = new Map<string, number>();
+    for (const n of sim.npcSystem.npcs.values()) {
+      if (!n.alive || !n.targetBuildingId || n.inVehicle || n.pathNodeIds.length > 0) continue;
+      const lateNight = n.currentActivity === "sleeping";
+      if (lateNight && n.status === "free") continue;
+      awake.set(n.targetBuildingId, (awake.get(n.targetBuildingId) ?? 0) + 1);
+    }
+    for (const [id, g] of this.windowsByBuilding) {
+      const b = sim.city.buildings.get(id);
+      if (!b) continue;
+      if (b.ruined || b.vacant) {
+        g.alpha = 0;
+        continue;
+      }
+      const people = awake.get(id) ?? 0;
+      const capacity = Math.max(1, b.residentCapacity + b.jobCapacity);
+      const civic = b.kind === "hospital" || b.kind === "police_station" || b.kind === "fire_station";
+      g.alpha = civic ? 0.7 + Math.min(0.3, people * 0.05) : people === 0 ? 0.04 : Math.min(1, 0.3 + (people / capacity) * 1.6);
+    }
+  }
+
   private drawSignals(sim: Simulation): void {
     const g = this.signals;
     g.clear();
@@ -154,6 +233,14 @@ export class Renderer {
   private drawSelection(sim: Simulation, id: string | null): void {
     this.selection.clear();
     this.route.clear();
+    if (this.selectedBuildingId) {
+      const b = sim.city.buildings.get(this.selectedBuildingId);
+      if (b) {
+        const s = wallHeight(b);
+        const a = 0.6 + Math.sin(this.time * 5) * 0.3;
+        this.selection.rect(b.x - b.w / 2 - 1.5, b.y - b.h / 2 - s - 1.5, b.w + 3, b.h + s + 3).stroke({ width: 1.2, color: 0x4dd2ff, alpha: a });
+      }
+    }
     if (!id) return;
     const npc = sim.npcSystem.npcs.get(id);
     if (!npc) return;

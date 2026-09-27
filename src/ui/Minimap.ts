@@ -90,6 +90,23 @@ export class Minimap {
       c.fillRect(this.tx(v.pos.x) - 0.75, this.ty(v.pos.y) - 0.75, 1.5, 1.5);
     }
 
+    for (const inc of sim.emergency.incidents.values()) {
+      c.fillStyle = inc.kind === "fire" ? "#ff7a2a" : inc.kind === "medical" ? "#ff6bd1" : "#ff3b30";
+      c.beginPath();
+      c.arc(this.tx(inc.x), this.ty(inc.y), 3, 0, Math.PI * 2);
+      c.fill();
+    }
+    for (const b of sim.city.buildings.values()) {
+      if (b.onFire === undefined && !b.ruined) continue;
+      c.fillStyle = b.ruined ? "#1b1714" : "#ff7a2a";
+      c.fillRect(this.tx(b.x - b.w / 2), this.ty(b.y - b.h / 2), b.w * this.scale, b.h * this.scale);
+    }
+    for (const v of sim.vehicleSystem.vehicles.values()) {
+      if (!v.siren) continue;
+      c.fillStyle = v.kind === "police_car" ? "#4d7cff" : v.kind === "fire_truck" ? "#ff5a3c" : "#ffffff";
+      c.fillRect(this.tx(v.pos.x) - 1.5, this.ty(v.pos.y) - 1.5, 3, 3);
+    }
+
     c.strokeStyle = "rgba(77,210,255,0.9)";
     c.lineWidth = 1;
     c.strokeRect(this.tx(view.x), this.ty(view.y), view.w * this.scale, view.h * this.scale);

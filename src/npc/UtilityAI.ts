@@ -30,8 +30,12 @@ export function decideActivity(npc: NPC, now: CalendarDate): ActionCandidate {
   });
   candidates.push({ activity: "leisure", utility: ((100 - npc.needs.fun) / 100) * 0.7 });
 
-  if (npc.occupation === "criminal" || npc.money < 50) {
-    const desperation = npc.money < 50 ? (50 - npc.money) / 50 : 0.3;
+  if (npc.occupation === "criminal" || npc.money < 50 || npc.homeless) {
+    // Desperation: broke, homeless, long-unemployed people are the ones who consider crime.
+    let desperation = npc.money < 50 ? (50 - npc.money) / 50 : 0.3;
+    if (npc.homeless) desperation += 0.25;
+    if (npc.daysUnemployed > 3) desperation += 0.1;
+    if (npc.gangId) desperation += 0.15;
     candidates.push({
       activity: "committing_crime",
       utility: desperation * npc.personality.riskTolerance * (1 - npc.personality.honesty) * 0.9,

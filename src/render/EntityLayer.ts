@@ -17,6 +17,9 @@ interface CarSprite extends Smoothed {
   body: Graphics;
   brake: Graphics;
   beams: Graphics;
+  lightRed?: Graphics;
+  lightBlue?: Graphics;
+  sirenGlow?: Graphics;
 }
 
 interface PersonSprite extends Smoothed {
@@ -37,6 +40,7 @@ export class EntityLayer {
   readonly people = new Container();
   readonly beams = new Container();
   private cars = new Map<string, CarSprite>();
+  private time = 0;
   private persons = new Map<string, PersonSprite>();
   debug = false;
 
@@ -48,6 +52,8 @@ export class EntityLayer {
   }
 
   syncVehicles(list: Iterable<Vehicle>, dt: number, darkness: number): void {
+    this.time += dt;
+    const flash = Math.floor(this.time * 6) % 2 === 0;
     const seen = new Set<string>();
     for (const v of list) {
       seen.add(v.id);
@@ -74,11 +80,20 @@ export class EntityLayer {
       s.beams.position.set(s.x, s.y);
       s.beams.rotation = s.heading;
       s.beams.alpha = Math.min(1, darkness * 1.2);
+      if (s.lightRed && s.lightBlue && s.sirenGlow) {
+        s.lightRed.alpha = v.siren ? (flash ? 1 : 0.25) : 0.35;
+        s.lightBlue.alpha = v.siren ? (flash ? 0.25 : 1) : 0.35;
+        s.sirenGlow.visible = v.siren;
+        s.sirenGlow.position.set(s.x, s.y);
+        s.sirenGlow.tint = flash ? 0xff3030 : 0x3070ff;
+        s.sirenGlow.alpha = 0.5 + darkness * 0.5;
+      }
     }
     for (const [id, s] of this.cars) {
       if (!seen.has(id)) {
         s.body.destroy({ children: true });
         s.beams.destroy();
+        s.sirenGlow?.destroy();
         this.cars.delete(id);
       }
     }
@@ -92,8 +107,8 @@ export class EntityLayer {
       if (!s) s = this.createPerson(npc);
 
       const target = npc.targetBuildingId ? this.city.buildings.get(npc.targetBuildingId) : undefined;
-      const walking = !npc.inVehicle && npc.pathNodeIds.length > 0;
-      const inPark = !walking && !npc.inVehicle && target?.kind === "park";
+      const walking = !npc.inVehicle && npc.pathNodeIds.length > 0 && (npc.status === "free" || npc.status === "fleeing");
+      const inPark = !walking && !npc.inVehicle && npc.status === "free" && target?.kind === "park";
       const outdoors = npc.alive && (walking || inPark);
 
       s.g.visible = outdoors && !this.debug;
@@ -173,9 +188,15 @@ export class EntityLayer {
   private createCar(v: Vehicle): CarSprite {
     const h = hashString(v.id);
     const body = new Graphics();
-    const color = v.kind === "police_car" ? 0x1c2f5e : v.kind === "taxi" ? 0xf2c230 : CAR_COLORS[h % CAR_COLORS.length];
-    const L = v.kind === "bus" || v.kind === "truck" ? 16 : 8.6;
-    const W = v.kind === "bus" || v.kind === "truck" ? 5.4 : 4.4;
+    const color =
+      v.kind === "police_car" ? 0x1c2f5e
+      : v.kind === "fire_truck" ? 0xc0261c
+      : v.kind === "ambulance" ? 0xf2f2ee
+      : v.kind === "taxi" ? 0xf2c230
+      : CAR_COLORS[h % CAR_COLORS.length];
+    const big = v.kind === "bus" || v.kind === "truck" || v.kind === "fire_truck";
+    const L = big ? 15 : v.kind === "ambulance" ? 11 : 8.6;
+    const W = big ? 5.4 : v.kind === "ambulance" ? 5 : 4.4;
     body.roundRect(-L / 2 + 0.6, -W / 2 + 0.8, L, W, 1.4).fill({ color: 0x000000, alpha: 0.3 });
     body.roundRect(-L / 2, -W / 2, L, W, 1.4).fill(color);
     body.roundRect(-L / 2, -W / 2, L, W, 1.4).stroke({ width: 0.4, color: 0x000000, alpha: 0.5 });
@@ -199,13 +220,36 @@ export class EntityLayer {
       this.onVehicleClick?.(v.id);
     });
 
+    let lightRed: Graphics | undefined;
+    let lightBlue: Graphics | undefined;
+    let sirenGlow: Graphics | undefined;
+    const emergency = v.kind === "police_car" || v.kind === "fire_truck" || v.kind === "ambulance";
+    if (v.kind === "police_car") {
+      body.rect(-L * 0.28, -W / 2 + 0.2, L * 0.18, W - 0.4).fill(0xf2f2ee);
+    } else if (v.kind === "ambulance") {
+      body.rect(-L / 2 + 0.5, -0.6, L - 1, 1.2).fill(0xd6343a);
+    } else if (v.kind === "fire_truck") {
+      body.rect(-L * 0.4, -W / 2 + 0.8, L * 0.55, W - 1.6).fill(0xb8b8b8);
+      for (let x = -L * 0.38; x < L * 0.12; x += 1.6) body.rect(x, -W / 2 + 0.8, 0.4, W - 1.6).fill(0x8a8a8a);
+    }
+    if (emergency) {
+      lightRed = new Graphics().rect(-1.2, -W / 2 + 0.3, 1.4, W / 2 - 0.3).fill(0xff2a2a);
+      lightBlue = new Graphics().rect(-1.2, 0, 1.4, W / 2 - 0.3).fill(0x2a6bff);
+      body.addChild(lightRed, lightBlue);
+      sirenGlow = new Graphics();
+      sirenGlow.circle(0, 0, 14).fill({ color: 0xffffff, alpha: 0.12 });
+      sirenGlow.circle(0, 0, 6).fill({ color: 0xffffff, alpha: 0.2 });
+      sirenGlow.visible = false;
+      this.beams.addChild(sirenGlow);
+    }
+
     const beams = new Graphics();
     beams.poly([L / 2, -W / 2 + 0.6, L / 2 + 18, -W / 2 - 4, L / 2 + 18, W / 2 + 4, L / 2, W / 2 - 0.6]).fill({ color: LIGHT.headlight, alpha: 0.06 });
     beams.poly([L / 2, -W / 2 + 0.8, L / 2 + 9, -W / 2 - 1.2, L / 2 + 9, W / 2 + 1.2, L / 2, W / 2 - 0.8]).fill({ color: LIGHT.headlight, alpha: 0.09 });
 
     this.vehicles.addChild(body);
     this.beams.addChild(beams);
-    const s: CarSprite = { body, brake, beams, x: v.pos.x, y: v.pos.y, heading: 0, lastTargetX: v.pos.x, lastTargetY: v.pos.y };
+    const s: CarSprite = { body, brake, beams, lightRed, lightBlue, sirenGlow, x: v.pos.x, y: v.pos.y, heading: 0, lastTargetX: v.pos.x, lastTargetY: v.pos.y };
     this.cars.set(v.id, s);
     return s;
   }

@@ -279,11 +279,118 @@ at 100x with 250 NPCs, so there is ample headroom to scale the population.
 The stress test got slower (~46s) because `NPCSystem.nearest()` scans every
 building. A spatial index is the planned fix in the performance phase.
 
+## Bug: traffic froze because NPCs re-planned every tick
+
+`NPCSystem` re-planned whenever the walking path was empty or the displayed
+activity differed from the decided one. Drivers always have an empty walking
+path, and travelers are relabeled "commuting", so every tick restarted the
+car's route from the last node passed and nothing got anywhere. The fix:
+NPCs re-plan only when their **goal** (`currentGoal`) changes or they're
+stranded short of the target. `currentActivity` is display state only.
+`tests/commute.test.ts` now asserts that cars cover real distance and that
+workers reach work, so a regression can't hide behind "no NaN" invariants
+again. Side effect: the stress test went from 46 s to 9 s (no more A* every
+tick).
+
+## Economy (Phase 6)
+
+`src/economy/Economy.ts`. Every dollar moves along an explicit path, and the
+books are audited in tests (`moneyInCity() == start + exports − imports +
+debtForgiven`, exact to the cent after 90 days):
+
+- **Customers → businesses.** Shops and restaurants sell only during hours and
+  only with a staff member on shift. Tickets scale with the buyer's wealth.
+  45% of each ticket is cost of goods imported from outside (money leaves).
+  NPCs budget, keeping about 4 days of rent before spending on extras.
+- **Businesses → wages, lease, 10% tax.** Owners draw no wage. They take a
+  modest salary when there's a cushion, plus half of any profit. Offices,
+  banks and warehouses earn **contract revenue** (money entering the city)
+  per worker-hour × skill × a drifting **economic climate**. The climate is
+  a random walk whose recessions and booms ripple into hiring.
+- **Residents → rent → treasury → civic salaries** (police, fire, doctors,
+  civil servants). Dependents (students, minors) pay no rent.
+- **Employment dynamics:** lateness is recorded when a worker is still
+  commuting at shift time, and 4 marks means firing. A business losing money
+  for 3 days lays off its weakest worker. 5 days in debt means bankruptcy,
+  with all staff unemployed. Employers hire the most employable seeker
+  (skill, clean record). Unemployed people get $40/day benefits for 21 days;
+  career criminals don't claim.
+- **Openings are demand-driven.** Entrepreneurs with savings open a business
+  only where residents and workers per competitor exceed a threshold. A small
+  storefront becomes whichever of shop or restaurant the neighborhood lacks.
+  World gen trims consumer businesses to roughly one per 14 residents, so the
+  city doesn't open with a wave of bankruptcies.
+- **Housing:** 3 missed rents means eviction and homelessness (sleeping in
+  parks). Homeless people save toward a deposit and are rehoused when they
+  can afford 3× rent. A **city council** cuts rents 10% when the treasury is
+  flush and homelessness exists, and raises them on shortfalls. This is the
+  counterweight that stopped homelessness climbing without limit in 60-day
+  runs.
+
+Tuning was done by running `npm run observe` for 30–90 days and fixing
+causes, never by scripting outcomes. Found this way: police and firefighters
+were never paid (their shift activity is "patrolling"), students paid full
+rent, owners paid themselves nothing and were evicted from their own success,
+and homeless workers spent every dollar eating out.
+
+## Crime, police, emergencies (Phase 7)
+
+- `src/police/CrimeSystem.ts` decides *what* a would-be criminal does: a
+  mugging (aggressive, victim nearby), a robbery (aggressive and brave), or
+  shoplifting. Police nearby deter smart criminals. Witnesses and victims form
+  memories and lose trust in the suspect. Each decides whether to report
+  based on honesty, bravery, friendship with the suspect, and gang
+  intimidation on gang turf. **Unreported crimes never reach the police.**
+  Evidence comes from who reported and how observant they were. After a
+  crime the suspect leaves the scene.
+- `src/emergency/EmergencySystem.ts` owns police cars, fire trucks and
+  ambulances as real vehicles parked at real stations. Dispatch picks the
+  nearest idle unit, which drives through traffic (sirens ignore red lights).
+  Police on scene arrest a nearby suspect or chase one who runs; runners
+  steer away from the car and can escape and become wanted. If the suspect is
+  gone, enough evidence gets them identified and picked up wherever they are;
+  otherwise the case is closed unsolved. An arrest brings jail time scaled by
+  severity and record, and may get the suspect fired. Fires grow until crews
+  arrive and burn buildings down if not stopped, making residents homeless
+  and closing businesses; ruins are rebuilt after 5 days. Collapses (hunger,
+  exhaustion, assault injuries, age) call an ambulance, followed by hospital
+  and a bill. People left too long can die.
+- **Gangs:** unemployed people with a record (or long-term homeless and
+  dishonest) turn to crime. At least 3 career criminals living in one district
+  form a gang with a leader, a territory and a shared cut of takings. Leaders
+  who are jailed are replaced, gangs become rivals and clash, and a gang
+  breaks up only when too few members remain.
+
+## Relationships and memory (Phase 8)
+
+`src/social/`. Relationships form from **shared time**: people at the same
+building (coworkers on shift, neighbors, strangers in a park) interact every
+15 sim minutes. The outcome depends on both personalities and existing
+trust, and people avoid those they dislike. Friends lend money to friends
+who are broke (a real transfer, remembered by both). Enemies with short
+tempers may fight, which becomes an assault through the crime pipeline.
+Couples form slowly and marry after 18+ days, then move in together.
+Households are seeded as family or couples at world gen. Memories are capped
+at 14 per NPC, merged when near-duplicate, fade daily (traumatic ones slower)
+and are evicted least-important-first.
+
+## World Chronicle and events (Phase 9)
+
+`src/events/Chronicle.ts` records only what systems emit when something
+noteworthy happens. `src/events/Hazards.ts` produces fires (odds by building
+type, higher when a business is in debt and neglecting upkeep), collapses,
+reconstruction and weekend festivals that draw crowds to a park. UI: a live
+news feed, a World Chronicle view (C) with daily stats and sparklines,
+building inspection (owner, 7-day finances, staff, residents) and a richer
+person inspector.
+
+Window lights at night now follow real occupancy (people awake inside), so
+the lit city is a map of where people actually are.
+
 ## What's deliberately NOT built yet (upcoming phases)
 
-Economy (beyond wage accrual), police/crime response, relationships/memory
-writes (fields exist on NPC, nothing populates them yet), procedural
-events, missions, save/load, observer/debug mode beyond the basic
-click-to-inspect HUD, chaos testing, ambient (non-NPC-owned) traffic like
-buses/taxis. Tracked phase-by-phase; see commit history for what landed
-when.
+Missions, player-side economy and interactions (buying, jobs, crimes, combat),
+save/load, observer tools beyond follow and inspect, chaos/debug tools,
+ambient buses and taxis, traffic accidents, births and migration (population
+is fixed at 250 apart from deaths). Treasury surplus above the rent floor
+still accumulates; public spending is a candidate sink.

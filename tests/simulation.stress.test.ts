@@ -39,7 +39,7 @@ describe("Simulation stress test", () => {
         expect(v).toBeLessThanOrEqual(100);
       }
 
-      expect(sim.city.buildings.has(npc.homeId)).toBe(true); // no orphaned home reference
+      if (!npc.homeless) expect(sim.city.buildings.has(npc.homeId)).toBe(true); // no orphaned home reference
       if (npc.workplaceId) {
         expect(sim.city.buildings.has(npc.workplaceId)).toBe(true);
       }

@@ -18,4 +18,9 @@ export interface Vehicle {
 
   parkedBuildingId?: string;
   currentRoadNodeId?: string;
+
+  /** Emergency lights on: ignores red signals. */
+  siren: boolean;
+  /** Station/garage an emergency or fleet vehicle belongs to. */
+  homeBuildingId?: string;
 }

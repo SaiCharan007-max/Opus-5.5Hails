@@ -33,6 +33,7 @@ export class VehicleSystem {
       waiting: false,
       parkedBuildingId: atBuilding.id,
       currentRoadNodeId: atBuilding.nearestRoadNodeId,
+      siren: false,
     };
     this.vehicles.set(id, v);
     return v;
@@ -40,11 +41,17 @@ export class VehicleSystem {
 
   /** Assigns a route to the target building. Returns false if unreachable. */
   requestTrip(vehicleId: string, target: Building): boolean {
+    return this.requestTripToNode(vehicleId, target.nearestRoadNodeId);
+  }
+
+  requestTripToNode(vehicleId: string, nodeId: string): boolean {
     const v = this.vehicles.get(vehicleId);
     if (!v) return false;
-    const startNode = v.currentRoadNodeId ?? this.city.roads.nearestNode(v.pos)?.id;
+    // Mid-edge, continue from the node we're heading to rather than snapping back.
+    const heading = v.pathNodeIds.length > 0 ? v.pathNodeIds[v.pathIndex] : undefined;
+    const startNode = heading ?? v.currentRoadNodeId ?? this.city.roads.nearestNode(v.pos)?.id;
     if (!startNode) return false;
-    const path = this.city.roads.findPath(startNode, target.nearestRoadNodeId);
+    const path = this.city.roads.findPath(startNode, nodeId);
     if (!path) return false;
     v.pathNodeIds = path;
     v.pathIndex = 0;
@@ -104,7 +111,7 @@ export class VehicleSystem {
     }
 
     const approachAxis = edge ? this.city.roads.axisOf(edge) : "ew";
-    const atRedLight = node.hasTrafficLight && node.lightAxis !== approachAxis && dist(v.pos, node) < 14;
+    const atRedLight = !v.siren && node.hasTrafficLight && node.lightAxis !== approachAxis && dist(v.pos, node) < 14;
 
     if (atRedLight) {
       v.waiting = true;
@@ -114,7 +121,7 @@ export class VehicleSystem {
     v.waiting = false;
 
     const speedLimit = edge ? edge.speedLimit * (1 - 0.7 * edge.congestion) : v.maxSpeed;
-    v.speed = Math.min(v.maxSpeed, speedLimit);
+    v.speed = v.siren ? v.maxSpeed * (1 - 0.3 * (edge?.congestion ?? 0)) : Math.min(v.maxSpeed, speedLimit);
 
     let remaining = v.speed * dtMinutes;
     while (remaining > 0 && v.pathIndex < v.pathNodeIds.length) {
@@ -136,7 +143,7 @@ export class VehicleSystem {
         remaining = 0;
       }
       // Re-check for a red light at the next node before continuing this step.
-      if (v.pathIndex < v.pathNodeIds.length) {
+      if (!v.siren && v.pathIndex < v.pathNodeIds.length) {
         const nextNode = this.city.roads.nodes.get(v.pathNodeIds[v.pathIndex]);
         if (nextNode?.hasTrafficLight) break;
       }
