@@ -96,7 +96,7 @@ export class VehicleSystem {
 
     // Find the edge we're currently traversing to read its congestion/speed limit.
     const prevNodeId = v.currentRoadNodeId ?? nodeId;
-    const edge = this.city.roads.neighborsOf(prevNodeId).find((e) => this.city.roads.other(e, prevNodeId) === nodeId);
+    const edge = this.city.roads.edgeBetween(prevNodeId, nodeId);
 
     if (edge) {
       const key = edge.id;

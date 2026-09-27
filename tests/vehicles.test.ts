@@ -54,10 +54,11 @@ describe("VehicleSystem", () => {
     const vs = new VehicleSystem(city);
     const lightNode = Array.from(city.roads.nodes.values()).find((n) => n.hasTrafficLight)!;
     expect(lightNode).toBeDefined();
-    const initialAxis = lightNode.lightAxis;
-    for (let i = 0; i < 20; i++) vs.update(1);
-    // Over 20 sim-minutes with a 2-minute cycle, axis must have flipped at least once.
-    const flipped = lightNode.lightAxis !== initialAxis || lightNode.lightTimer < 2;
-    expect(flipped).toBe(true);
+    const seen = new Set<string>([lightNode.lightAxis]);
+    for (let i = 0; i < 20; i++) {
+      vs.update(1);
+      seen.add(lightNode.lightAxis);
+    }
+    expect(seen.size).toBe(2);
   });
 });

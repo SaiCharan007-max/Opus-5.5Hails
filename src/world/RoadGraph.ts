@@ -32,6 +32,15 @@ export class RoadGraph {
   nodes: Map<string, RoadNode> = new Map();
   edges: Map<string, RoadEdge> = new Map();
   private adjacency: Map<string, RoadEdge[]> = new Map();
+  private byEndpoints: Map<string, RoadEdge> = new Map();
+
+  private static key(a: string, b: string): string {
+    return a < b ? `${a}|${b}` : `${b}|${a}`;
+  }
+
+  edgeBetween(a: string, b: string): RoadEdge | undefined {
+    return this.byEndpoints.get(RoadGraph.key(a, b));
+  }
 
   addNode(node: RoadNode): void {
     this.nodes.set(node.id, node);
@@ -44,6 +53,7 @@ export class RoadGraph {
     if (!from || !to) throw new Error(`RoadGraph.addEdge: missing node ${edge.from} or ${edge.to}`);
     const full: RoadEdge = { ...edge, length: dist(from, to), congestion: 0 };
     this.edges.set(full.id, full);
+    this.byEndpoints.set(RoadGraph.key(from.id, to.id), full);
     this.adjacency.get(from.id)!.push(full);
     this.adjacency.get(to.id)!.push(full);
     return full;

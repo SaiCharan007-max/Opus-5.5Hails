@@ -1,212 +1,202 @@
-import { Application, Container, Graphics, Text, TextStyle } from "pixi.js";
+import { Application, Container, Graphics } from "pixi.js";
 import type { Simulation } from "../sim/Simulation";
-import type { NPC } from "../npc/NPC";
-import type { Vehicle } from "../traffic/Vehicle";
 import type { Vec2 } from "../core/types";
+import { CITY_HEIGHT, CITY_WIDTH } from "../world/constants";
+import { paintCity } from "./CityPainter";
+import { EntityLayer } from "./EntityLayer";
+import { LIGHT } from "./palette";
 
-const DISTRICT_COLORS: Record<string, number> = {
-  downtown: 0x2b2f3a,
-  financial: 0x243447,
-  residential: 0x2e3a2b,
-  suburbs: 0x33402e,
-  old_town: 0x3a2f2b,
-  entertainment: 0x3a2b3a,
-  industrial: 0x2f2f2f,
-  harbor: 0x1f3038,
-};
+const MIN_ZOOM = 0.9;
+const MAX_ZOOM = 7;
 
-const NPC_COLOR: Record<string, number> = {
-  civilians: 0x9fb4c7,
-  police: 0x4d7cff,
-  government: 0xd4af37,
-  criminals: 0xd14b4b,
-  business: 0x7fd17f,
-  emergency_services: 0xff9a4d,
-};
-
+/**
+ * Composes the scene. Layer order (bottom to top):
+ * ground → route line → vehicles → people → structures → darkness → night lights/beams → signals → selection.
+ * Structures sit above moving entities so tall roofs occlude the street behind them.
+ */
 export class Renderer {
   app!: Application;
-  world = new Container();
-  roadLayer = new Graphics();
-  buildingLayer = new Graphics();
-  npcLayer = new Container();
-  vehicleLayer = new Container();
-  playerMarker = new Graphics();
+  readonly world = new Container();
+  entities!: EntityLayer;
+  private darkness = new Graphics();
+  private nightLights!: Container;
+  private signals = new Graphics();
+  private route = new Graphics();
+  private selection = new Graphics();
+  private player = new Graphics();
 
-  private npcSprites = new Map<string, Graphics>();
-  private vehicleSprites = new Map<string, Graphics>();
-  private hoveredNpcId: string | null = null;
+  zoom = 2.2;
+  private camX = CITY_WIDTH / 2;
+  private camY = CITY_HEIGHT / 2;
+  darknessLevel = 0;
+  private time = 0;
 
-  onNpcClick: ((npcId: string) => void) | null = null;
-
-  async init(container: HTMLElement): Promise<void> {
+  async init(container: HTMLElement, sim: Simulation): Promise<void> {
     this.app = new Application();
     await this.app.init({
       resizeTo: container,
-      background: "#0a0a0f",
+      background: "#1f4e66",
       antialias: true,
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
+      autoDensity: true,
     });
+    this.app.canvas.style.position = "absolute";
+    this.app.canvas.style.inset = "0";
     container.appendChild(this.app.canvas);
 
-    this.world.addChild(this.roadLayer, this.buildingLayer, this.vehicleLayer, this.npcLayer, this.playerMarker);
+    const painted = paintCity(sim.city);
+    this.nightLights = painted.nightLights;
+    this.entities = new EntityLayer(sim.city);
+
+    this.darkness.rect(-2000, -2000, CITY_WIDTH + 4000, CITY_HEIGHT + 4000).fill(0xffffff);
+    this.darkness.eventMode = "none";
+    this.nightLights.eventMode = "none";
+    this.entities.beams.eventMode = "none";
+
+    this.player.circle(0, 0, 7).fill({ color: 0x4dd2ff, alpha: 0.18 });
+    this.player.ellipse(0.6, 0.8, 2.3, 1.7).fill({ color: 0x000000, alpha: 0.35 });
+    this.player.ellipse(0, 0, 1.6, 2.5).fill(0xffffff);
+    this.player.ellipse(0, 0, 1.6, 2.5).stroke({ width: 0.5, color: 0x0a0a0a });
+    this.player.circle(0.3, 0, 1.15).fill(0xf1c9a5);
+    this.player.poly([3.2, -1.1, 5, 0, 3.2, 1.1]).fill(0x4dd2ff);
+
+    this.world.addChild(
+      painted.ground,
+      this.route,
+      this.entities.vehicles,
+      this.entities.people,
+      this.player,
+      painted.structures,
+      this.darkness,
+      this.nightLights,
+      this.entities.beams,
+      this.signals,
+      this.selection,
+    );
     this.app.stage.addChild(this.world);
-
-    this.drawStaticBackdropPlaceholder();
   }
 
-  private drawStaticBackdropPlaceholder(): void {
-    // populated by drawCity() once a simulation exists
+  /** Called once per frame with the camera target (player or followed NPC). */
+  frame(sim: Simulation, dt: number, focus: Vec2, playerPos: Vec2, playerHeading: number, selectedNpcId: string | null): void {
+    this.time += dt;
+    const k = 1 - Math.exp(-dt * 8);
+    this.camX += (focus.x - this.camX) * k;
+    this.camY += (focus.y - this.camY) * k;
+    this.applyCamera();
+
+    this.updateLighting(sim);
+    this.entities.syncVehicles(sim.vehicleSystem.vehicles.values(), dt, this.darknessLevel);
+    this.entities.syncPeople(sim.npcSystem.npcs.values(), dt);
+    this.drawSignals(sim);
+
+    this.player.position.set(playerPos.x, playerPos.y);
+    this.player.rotation = playerHeading;
+    this.drawSelection(sim, selectedNpcId);
   }
 
-  drawCity(sim: Simulation): void {
-    this.buildingLayer.clear();
-    this.roadLayer.clear();
-
-    for (const d of sim.city.districts.values()) {
-      const color = DISTRICT_COLORS[d.kind] ?? 0x222222;
-      this.buildingLayer.rect(d.minX, d.minY, d.maxX - d.minX, d.maxY - d.minY).fill({ color, alpha: 0.5 });
-    }
-
-    this.roadLayer.setStrokeStyle({ width: 4, color: 0x555b66, alpha: 0.9 });
-    for (const edge of sim.city.roads.edges.values()) {
-      const from = sim.city.roads.nodes.get(edge.from)!;
-      const to = sim.city.roads.nodes.get(edge.to)!;
-      this.roadLayer.moveTo(from.x, from.y).lineTo(to.x, to.y).stroke();
-    }
-    for (const node of sim.city.roads.nodes.values()) {
-      if (node.hasTrafficLight) {
-        this.roadLayer.circle(node.x, node.y, 3).fill({ color: node.lightAxis === "ns" ? 0x4dff4d : 0xff4d4d });
-      }
-    }
-
-    for (const b of sim.city.buildings.values()) {
-      const size = 10 + b.jobCapacity * 0.4 + b.residentCapacity * 0.3;
-      this.buildingLayer.rect(b.x - size / 2, b.y - size / 2, size, size).fill({ color: buildingColor(b.kind), alpha: 0.9 });
-    }
+  private applyCamera(): void {
+    const sw = this.app.screen.width;
+    const sh = this.app.screen.height;
+    const halfW = sw / 2 / this.zoom;
+    const halfH = sh / 2 / this.zoom;
+    const margin = 260;
+    const cx = clampRange(this.camX, -margin + halfW, CITY_WIDTH + margin - halfW);
+    const cy = clampRange(this.camY, -margin + halfH, CITY_HEIGHT + margin + 120 - halfH);
+    this.world.scale.set(this.zoom);
+    this.world.position.set(sw / 2 - cx * this.zoom, sh / 2 - cy * this.zoom);
   }
 
-  syncNPCs(npcs: Iterable<NPC>): void {
-    const seen = new Set<string>();
-    for (const npc of npcs) {
-      seen.add(npc.id);
-      let g = this.npcSprites.get(npc.id);
-      if (!g) {
-        g = new Graphics();
-        g.eventMode = "static";
-        g.cursor = "pointer";
-        g.on("pointertap", () => this.onNpcClick?.(npc.id));
-        this.npcSprites.set(npc.id, g);
-        this.npcLayer.addChild(g);
-      }
-      g.clear();
-      const radius = npc.lod === "high" ? 3.5 : 2.5;
-      const color = NPC_COLOR[npc.faction] ?? 0xffffff;
-      g.circle(0, 0, radius).fill({ color, alpha: npc.lod === "abstract" ? 0.35 : 1 });
-      g.position.set(npc.pos.x, npc.pos.y);
-      g.visible = npc.lod !== "abstract" || true; // abstract NPCs still drawn faintly for observer mode
-    }
-    for (const [id, g] of this.npcSprites) {
-      if (!seen.has(id)) {
-        g.destroy();
-        this.npcSprites.delete(id);
-      }
-    }
+  snapCamera(pos: Vec2): void {
+    this.camX = pos.x;
+    this.camY = pos.y;
   }
 
-  syncVehicles(vehicles: Iterable<Vehicle>): void {
-    const seen = new Set<string>();
-    for (const v of vehicles) {
-      seen.add(v.id);
-      let g = this.vehicleSprites.get(v.id);
-      if (!g) {
-        g = new Graphics();
-        this.vehicleSprites.set(v.id, g);
-        this.vehicleLayer.addChild(g);
-      }
-      const moving = v.pathNodeIds.length > 0;
-      g.clear();
-      g.visible = moving;
-      if (moving) {
-        g.rect(-4, -2.5, 8, 5).fill({ color: v.waiting ? 0xaa3333 : vehicleColor(v.kind) });
-        g.position.set(v.pos.x, v.pos.y);
-      }
-    }
-    for (const [id, g] of this.vehicleSprites) {
-      if (!seen.has(id)) {
-        g.destroy();
-        this.vehicleSprites.delete(id);
-      }
-    }
+  zoomBy(factor: number): void {
+    this.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.zoom * factor));
   }
 
-  drawPlayer(pos: Vec2): void {
-    this.playerMarker.clear();
-    this.playerMarker.circle(0, 0, 5).fill({ color: 0xffffff }).stroke({ width: 1.5, color: 0x000000 });
-    this.playerMarker.position.set(pos.x, pos.y);
-  }
-
-  centerCameraOn(pos: Vec2, zoom = 2): void {
-    this.world.scale.set(zoom);
-    this.world.position.set(this.app.screen.width / 2 - pos.x * zoom, this.app.screen.height / 2 - pos.y * zoom);
-  }
-
-  screenToWorld(sx: number, sy: number): Vec2 {
+  /** Visible world rect, for the minimap viewport indicator. */
+  viewRect(): { x: number; y: number; w: number; h: number } {
+    const s = this.world.scale.x;
     return {
-      x: (sx - this.world.position.x) / this.world.scale.x,
-      y: (sy - this.world.position.y) / this.world.scale.y,
+      x: -this.world.position.x / s,
+      y: -this.world.position.y / s,
+      w: this.app.screen.width / s,
+      h: this.app.screen.height / s,
     };
   }
-}
 
-function vehicleColor(kind: string): number {
-  switch (kind) {
-    case "police_car":
-      return 0x4d7cff;
-    case "fire_truck":
-      return 0xff5a3c;
-    case "ambulance":
-      return 0xff6bd1;
-    case "bus":
-      return 0xffd24d;
-    case "truck":
-      return 0x8d8d8d;
-    default:
-      return 0xcccccc;
+  private updateLighting(sim: Simulation): void {
+    const darkness = 1 - sim.clock.daylightFactor();
+    this.darknessLevel = darkness;
+    // Deep blue at night, violet-amber through dusk and dawn.
+    const dusk = darkness > 0.05 && darkness < 0.8 ? 1 - Math.abs(darkness - 0.4) / 0.4 : 0;
+    this.darkness.tint = mixColor(0x0a1236, 0x6a3f5a, Math.max(0, dusk) * 0.6);
+    this.darkness.alpha = darkness * 0.68 + Math.max(0, dusk) * 0.06;
+    this.nightLights.alpha = smoothstep(0.25, 0.75, darkness);
+  }
+
+  private drawSignals(sim: Simulation): void {
+    const g = this.signals;
+    g.clear();
+    for (const n of sim.city.roads.nodes.values()) {
+      if (!n.hasTrafficLight) continue;
+      const ns = n.lightAxis === "ns" ? LIGHT.signalGreen : LIGHT.signalRed;
+      const ew = n.lightAxis === "ew" ? LIGHT.signalGreen : LIGHT.signalRed;
+      const o = 12.5;
+      g.circle(n.x - o, n.y - o, 0.95).fill(ns);
+      g.circle(n.x + o, n.y + o, 0.95).fill(ns);
+      g.circle(n.x + o, n.y - o, 0.95).fill(ew);
+      g.circle(n.x - o, n.y + o, 0.95).fill(ew);
+    }
+  }
+
+  private drawSelection(sim: Simulation, id: string | null): void {
+    this.selection.clear();
+    this.route.clear();
+    if (!id) return;
+    const npc = sim.npcSystem.npcs.get(id);
+    if (!npc) return;
+
+    let pos = this.entities.personPos(id) ?? npc.pos;
+    if (npc.inVehicle && npc.vehicleId) pos = this.entities.carPos(npc.vehicleId) ?? pos;
+    const pulse = 1 + Math.sin(this.time * 5) * 0.15;
+    this.selection.circle(pos.x, pos.y, 6 * pulse).stroke({ width: 1, color: 0x4dd2ff, alpha: 0.95 });
+    this.selection.circle(pos.x, pos.y, 9 * pulse).stroke({ width: 0.6, color: 0x4dd2ff, alpha: 0.4 });
+
+    // Remaining route: walking path, or the vehicle's path while driving.
+    const vehicle = npc.inVehicle && npc.vehicleId ? sim.vehicleSystem.vehicles.get(npc.vehicleId) : undefined;
+    const nodes = vehicle ? vehicle.pathNodeIds.slice(vehicle.pathIndex) : npc.pathNodeIds.slice(npc.pathIndex);
+    const target = npc.targetBuildingId ? sim.city.buildings.get(npc.targetBuildingId) : undefined;
+    if (nodes.length === 0 && !target) return;
+    this.route.moveTo(pos.x, pos.y);
+    for (const nid of nodes) {
+      const n = sim.city.roads.nodes.get(nid);
+      if (n) this.route.lineTo(n.x, n.y);
+    }
+    if (target) this.route.lineTo(target.x, target.y);
+    this.route.stroke({ width: 1.6, color: 0x4dd2ff, alpha: 0.55 });
+    if (target) {
+      this.route.circle(target.x, target.y, 3).fill({ color: 0x4dd2ff, alpha: 0.9 });
+    }
   }
 }
 
-function buildingColor(kind: string): number {
-  switch (kind) {
-    case "police_station":
-      return 0x4d7cff;
-    case "fire_station":
-      return 0xff5a3c;
-    case "hospital":
-      return 0xff6bd1;
-    case "government":
-      return 0xd4af37;
-    case "park":
-      return 0x4caf50;
-    case "home_apartment":
-    case "home_house":
-      return 0x8ab4f8;
-    case "shop":
-      return 0xffd24d;
-    case "restaurant":
-      return 0xff9a4d;
-    case "warehouse":
-      return 0x8d8d8d;
-    case "bank":
-      return 0x6bd1ff;
-    case "school":
-      return 0xb388ff;
-    case "office":
-      return 0xaaaaaa;
-    default:
-      return 0x666666;
-  }
+function clampRange(v: number, lo: number, hi: number): number {
+  if (lo > hi) return (lo + hi) / 2;
+  return Math.max(lo, Math.min(hi, v));
 }
 
-export function makeLabel(text: string, size = 12, color = 0xffffff): Text {
-  return new Text({ text, style: new TextStyle({ fontSize: size, fill: color, fontFamily: "Segoe UI, sans-serif" }) });
+function smoothstep(a: number, b: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+function mixColor(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return (r << 16) | (g << 8) | bl;
 }

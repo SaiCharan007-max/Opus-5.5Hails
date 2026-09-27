@@ -16,8 +16,15 @@ export interface Building {
   kind: BuildingKind;
   name: string;
   districtId: string;
+  /** Footprint center. */
   x: number;
   y: number;
+  /** Footprint size in world units. */
+  w: number;
+  h: number;
+  floors: number;
+  /** Commercial lot with no tenant business; a candidate for a business opening later. */
+  vacant: boolean;
   nearestRoadNodeId: string;
   /** Max simultaneous jobs this building offers (0 for homes/parks). */
   jobCapacity: number;

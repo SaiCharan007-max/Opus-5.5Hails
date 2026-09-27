@@ -96,15 +96,16 @@ export class SimClock {
     return (["spring", "summer", "autumn", "winter"] as const)[cycle];
   }
 
-  /** 0 (midnight) .. 1 (noon) .. 0 (midnight) — for lighting/day-night visuals. */
+  /** 0 = full night, 1 = full day. Dawn 05:30–07:30, dusk 18:30–20:30. */
   daylightFactor(): number {
     const { hour, minute } = this.now();
     const t = hour + minute / 60;
-    // Sunrise ~6, sunset ~20. Smooth cosine curve peaking at 13:00.
-    const peak = 13;
-    const span = 14;
-    const x = ((t - peak) / span) * Math.PI;
-    return Math.max(0, Math.cos(x));
+    let x: number;
+    if (t < 5.5 || t >= 20.5) x = 0;
+    else if (t < 7.5) x = (t - 5.5) / 2;
+    else if (t < 18.5) x = 1;
+    else x = 1 - (t - 18.5) / 2;
+    return x * x * (3 - 2 * x);
   }
 
   formatTime(): string {

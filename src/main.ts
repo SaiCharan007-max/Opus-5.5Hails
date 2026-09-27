@@ -2,62 +2,115 @@ import { Simulation } from "./sim/Simulation";
 import { Renderer } from "./render/Renderer";
 import { HUD } from "./ui/HUD";
 import type { Vec2 } from "./core/types";
+import type { Building } from "./world/City";
 
 const SEED = 1337;
 const NPC_COUNT = 250;
+const WALK_SPEED = 30;
+const RUN_SPEED = 60;
+const SPEED_KEYS = [1, 2, 5, 10, 50, 100];
+
+function blocksPlayer(b: Building, x: number, y: number): boolean {
+  if (b.kind === "park" || b.kind === "parking") return false;
+  return Math.abs(x - b.x) < b.w / 2 + 1.5 && Math.abs(y - b.y) < b.h / 2 + 1.5;
+}
 
 async function main() {
   const container = document.getElementById("app")!;
-
   const sim = new Simulation({ seed: SEED, npcCount: NPC_COUNT });
+  const buildings = Array.from(sim.city.buildings.values());
 
   const renderer = new Renderer();
-  await renderer.init(container);
-  renderer.drawCity(sim);
+  await renderer.init(container, sim);
 
-  const firstHome = sim.city.buildingsOfKind("home_house")[0] ?? sim.city.buildingsOfKind("home_apartment")[0];
-  const player = { pos: { x: firstHome?.x ?? 0, y: firstHome?.y ?? 0 } as Vec2, speed: 60 };
+  const downtown = Array.from(sim.city.districts.values()).find((d) => d.kind === "downtown")!;
+  const spawnNode = sim.city.roads.nearestNode({ x: (downtown.minX + downtown.maxX) / 2, y: (downtown.minY + downtown.maxY) / 2 })!;
+  const player = { pos: { x: spawnNode.x + 30, y: spawnNode.y } as Vec2, heading: 0 };
+  renderer.snapCamera(player.pos);
+
+  let selectedId: string | null = null;
+  let followingId: string | null = null;
+
+  const hud = new HUD(container, sim, {
+    onSpeed: (s) => setSpeed(s),
+    onFollow: (id) => follow(id),
+    onClose: () => deselect(),
+  });
+
+  function setSpeed(s: number) {
+    if (s === 0) {
+      sim.clock.paused = true;
+      return;
+    }
+    sim.clock.paused = false;
+    sim.clock.timeScale = s;
+  }
+  function select(id: string) {
+    selectedId = id;
+    const npc = sim.npcSystem.npcs.get(id);
+    if (npc) hud.showInspector(npc, sim, followingId === id, true);
+  }
+  function follow(id: string) {
+    followingId = followingId === id ? null : id;
+    hud.setFollowing(followingId ? sim.npcSystem.npcs.get(followingId)?.name ?? null : null);
+    const npc = sim.npcSystem.npcs.get(id);
+    if (npc) hud.showInspector(npc, sim, followingId === id, true);
+  }
+  function deselect() {
+    selectedId = null;
+    followingId = null;
+    hud.setFollowing(null);
+    hud.hideInspector();
+  }
+
+  renderer.entities.onPersonClick = (id) => select(id);
+  renderer.entities.onVehicleClick = (vid) => {
+    const owner = sim.vehicleSystem.vehicles.get(vid)?.ownerNpcId;
+    if (owner) select(owner);
+  };
 
   const keys = new Set<string>();
   window.addEventListener("keydown", (e) => {
-    keys.add(e.key.toLowerCase());
+    const k = e.key.toLowerCase();
+    keys.add(k);
     if (e.key === " ") {
       sim.clock.paused = !sim.clock.paused;
       e.preventDefault();
-    }
-    if (["1", "2", "3", "4", "5"].includes(e.key)) {
-      sim.clock.timeScale = [1, 2, 5, 10, 50][Number(e.key) - 1];
-    }
+    } else if (e.key >= "1" && e.key <= "6") {
+      setSpeed(SPEED_KEYS[Number(e.key) - 1]);
+    } else if (k === "f" && selectedId) {
+      follow(selectedId);
+    } else if (e.key === "F3") {
+      renderer.entities.debug = !renderer.entities.debug;
+      e.preventDefault();
+    } else if (e.key === "Escape") {
+      if (followingId) {
+        followingId = null;
+        hud.setFollowing(null);
+      } else deselect();
+    } else if (k === "=" || k === "+") renderer.zoomBy(1.2);
+    else if (k === "-") renderer.zoomBy(1 / 1.2);
   });
   window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+  window.addEventListener("blur", () => keys.clear());
+  container.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      renderer.zoomBy(Math.exp(-e.deltaY * 0.0015));
+    },
+    { passive: false },
+  );
 
-  const hud = new HUD(container, (scale) => {
-    if (scale === 0) {
-      sim.clock.paused = true;
-    } else {
-      sim.clock.paused = false;
-      sim.clock.timeScale = scale;
-    }
-  });
+  document.getElementById("loading")?.remove();
 
-  let selectedNpcId: string | null = null;
-  renderer.onNpcClick = (id) => {
-    selectedNpcId = id;
-  };
-  container.addEventListener("click", (e) => {
-    const target = e.target as HTMLElement;
-    if (target.tagName === "CANVAS") {
-      // clicks on empty canvas (not caught by an NPC sprite) deselect
-    }
-  });
-
-  let lastTime = performance.now();
+  let last = performance.now();
   let fps = 60;
-
-  function frame(now: number) {
-    const dtSeconds = Math.min((now - lastTime) / 1000, 0.25);
-    lastTime = now;
-    fps = fps * 0.9 + (1 / Math.max(dtSeconds, 1e-6)) * 0.1;
+  let simMs = 0;
+  function frame(t: number) {
+    const dt = Math.min((t - last) / 1000, 0.1);
+    last = t;
+    fps = fps * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
 
     let dx = 0;
     let dy = 0;
@@ -65,36 +118,49 @@ async function main() {
     if (keys.has("s") || keys.has("arrowdown")) dy += 1;
     if (keys.has("a") || keys.has("arrowleft")) dx -= 1;
     if (keys.has("d") || keys.has("arrowright")) dx += 1;
-    if (dx !== 0 || dy !== 0) {
+    if (dx || dy) {
+      if (followingId) {
+        followingId = null;
+        hud.setFollowing(null);
+      }
       const len = Math.hypot(dx, dy);
-      player.pos.x += (dx / len) * player.speed * dtSeconds;
-      player.pos.y += (dy / len) * player.speed * dtSeconds;
+      const step = (keys.has("shift") ? RUN_SPEED : WALK_SPEED) * dt;
+      const nx = player.pos.x + (dx / len) * step;
+      const ny = player.pos.y + (dy / len) * step;
+      if (!buildings.some((b) => blocksPlayer(b, nx, player.pos.y))) player.pos.x = nx;
+      if (!buildings.some((b) => blocksPlayer(b, player.pos.x, ny))) player.pos.y = ny;
+      player.heading = Math.atan2(dy, dx);
     }
 
-    sim.step(dtSeconds, player.pos);
+    const s0 = performance.now();
+    sim.step(dt, player.pos);
+    simMs = simMs * 0.95 + (performance.now() - s0) * 0.05;
 
-    renderer.syncNPCs(sim.npcSystem.npcs.values());
-    renderer.syncVehicles(sim.vehicleSystem.vehicles.values());
-    renderer.drawPlayer(player.pos);
-    renderer.centerCameraOn(player.pos, 2.2);
-
-    hud.update(sim, fps);
-    if (selectedNpcId) {
-      const npc = sim.npcSystem.npcs.get(selectedNpcId);
-      if (npc) hud.showInspector(npc, sim.city);
-      else hud.hideInspector();
+    let focus: Vec2 = player.pos;
+    if (followingId) {
+      const npc = sim.npcSystem.npcs.get(followingId);
+      if (npc) {
+        focus = (npc.inVehicle && npc.vehicleId ? renderer.entities.carPos(npc.vehicleId) : renderer.entities.personPos(npc.id)) ?? npc.pos;
+      }
     }
+    renderer.frame(sim, dt, focus, player.pos, player.heading, selectedId);
 
+    hud.update(sim, fps, simMs, focus, dt);
+    hud.minimap.draw(sim, player.pos, renderer.viewRect(), selectedId ? sim.npcSystem.npcs.get(selectedId)?.pos : undefined);
+    if (selectedId) {
+      const npc = sim.npcSystem.npcs.get(selectedId);
+      if (npc) hud.showInspector(npc, sim, followingId === selectedId);
+      else deselect();
+    }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 
-  // Expose for console debugging / future dev tools.
-  (window as any).__sim = sim;
+  Object.assign(window, { __sim: sim, __select: select, __follow: follow });
 }
 
 main().catch((err) => {
   console.error("Fatal startup error:", err);
-  const el = document.getElementById("app")!;
-  el.innerHTML = `<pre style="color:#f66;padding:20px;">${String(err?.stack ?? err)}</pre>`;
+  const el = document.getElementById("loading");
+  if (el) el.textContent = `Failed to start: ${String(err?.message ?? err)}`;
 });

@@ -158,7 +158,7 @@ export class NPCSystem {
     let best: Building | undefined;
     let bestD = Infinity;
     for (const b of this.city.buildings.values()) {
-      if (b.kind !== kind) continue;
+      if (b.kind !== kind || b.vacant) continue;
       const d = dist(npc.pos, b);
       if (d < bestD) {
         bestD = d;

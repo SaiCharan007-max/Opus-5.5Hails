@@ -20,11 +20,14 @@ Open the URL Vite prints (usually http://localhost:5173).
 
 ### Controls
 
-- **WASD / arrow keys** — move the player
-- **Click an NPC** — inspect them (job, needs, money, activity, relationships, memories)
-- **1 / 2 / 3 / 4 / 5** or the speed buttons — set simulation speed (1x/2x/5x/10x/50x)
-- **Space** — pause/resume
-- **F3** — debug overlay (planned)
+- **WASD / arrow keys** — walk (hold **Shift** to run)
+- **Mouse wheel** or **+ / −** — zoom in and out
+- **Click a person or a car** — inspect them (job, home, current activity, money, needs, relationships, memories)
+- **F** or the **Follow** button — camera follows the selected person through their day
+- **Esc** — stop following / close the inspector
+- **1–6** or the speed buttons — simulation speed 1×, 2×, 5×, 10×, 50×, 100×
+- **Space** — pause / resume
+- **F3** — debug view: shows every NPC (including those indoors), colored by faction, faded when simulated at low detail
 
 ### Other commands
 
@@ -36,7 +39,10 @@ npm test          # run the automated test suite (vitest)
 
 ## Project status
 
-Phases 1–5 complete: procedural city generation, NPC simulation with
-needs/schedules/utility AI and level-of-detail scaling, and a traffic/vehicle
-system with congestion-aware pathfinding. See `DECISIONS.md` for what's
-built and what's still ahead.
+Done so far: procedural city (districts, lots, 300+ buildings), 250 NPCs with
+needs, schedules, utility AI and level-of-detail scaling, traffic with lights
+and congestion-aware routing, and a full visual pass (2.5D buildings,
+day/night lighting, minimap, inspector, follow camera).
+
+Next: economy, crime and police, relationships and memory, city events,
+missions, save/load, and a world chronicle. See `DECISIONS.md` for details.

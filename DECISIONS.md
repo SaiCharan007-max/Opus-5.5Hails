@@ -238,6 +238,47 @@ active), and traffic-light axis toggling over time.
 light, colored by vehicle kind. Not yet in the debug/inspector overlay —
 Phase 14 territory.
 
+## Visual presentation (pulled forward from Phase 12)
+
+The first renderer was a debug view (dots and squares in a void). User
+feedback made clear every checkpoint must look like a game, so the visual
+pass was done early rather than at the end.
+
+- **Lots, not scattered buildings.** Each block's buildable interior (inside
+  roads and sidewalks, `blockInterior()`) is split into a lot grid chosen
+  per district (dense 2x2 towers downtown, 3x3 houses with setbacks in the
+  suburbs, big warehouse lots in industry). Buildings now carry a real
+  footprint (`w`, `h`) and `floors`. Nothing overlaps, and the city reads as a
+  city. ~30% of commercial lots are `vacant`, left available for future
+  "business opened" events. Civic buildings are made by converting an
+  existing lot, so they never overlap anything.
+- **2.5D oblique projection.** Each building is drawn as a south facade plus
+  a roof shifted north by a height derived from floors. Tall towers
+  therefore read as tall, facades carry window grids, and buildings are
+  depth-sorted by their southern edge. Structures render *above* cars and
+  people, so tall roofs correctly occlude the street behind them.
+- **Static vs dynamic layers.** `CityPainter` draws terrain, roads (lane
+  markings, zebra crossings, stop lines), lots, parks, parking, the coast and
+  harbor, and buildings exactly once, so per-frame cost is zero.
+  `EntityLayer` owns everything that moves.
+- **Render-side smoothing, not sim-side lanes.** The sim moves entities
+  along road centerlines at 10 Hz. The renderer interpolates, derives
+  headings, and offsets cars into the right-hand lane and pedestrians onto
+  sidewalks. The simulation stays simple and the street still looks right.
+  People who are indoors are hidden (F3 shows everyone).
+- **Day/night.** `SimClock.daylightFactor()` has explicit dawn (05:30–07:30)
+  and dusk (18:30–20:30) ramps. A tinted darkness layer sits above the world,
+  and an additive-blend light layer (lit windows, street lamps, headlight
+  cones) fades in above it.
+- **Visual randomness never touches the sim RNG.** Decorations (trees, roof
+  details, car colors, lit windows) use their own seeded RNG and id hashes,
+  so visuals can change without affecting simulation determinism.
+
+Measured cost: `Simulation.step` takes ~0.1 ms/frame at 1x and ~0.5 ms/frame
+at 100x with 250 NPCs, so there is ample headroom to scale the population.
+The stress test got slower (~46s) because `NPCSystem.nearest()` scans every
+building. A spatial index is the planned fix in the performance phase.
+
 ## What's deliberately NOT built yet (upcoming phases)
 
 Economy (beyond wage accrual), police/crime response, relationships/memory
